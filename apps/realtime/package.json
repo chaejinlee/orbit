@@ -1,0 +1,25 @@
+{
+  "name": "@orbit/realtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Yjs collaboration server (Hocuspocus): board layout + shared itinerary draft, persisted to Postgres.",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hocuspocus/common": "4.8.0",
+    "@hocuspocus/extension-database": "4.8.0",
+    "@hocuspocus/server": "4.8.0",
+    "@orbit/db": "*",
+    "@orbit/shared": "*",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "@hocuspocus/provider": "4.8.0"
+  }
+}

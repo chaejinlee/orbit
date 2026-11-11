@@ -1,0 +1,192 @@
+/* Explicit sources instead of auto-detection: deterministic, skips node_modules
+   and .data, and immune to stray .gitignore files in parent folders (a `*`
+   in ~/.gitignore otherwise hides every source file from the scanner). */
+@import 'tailwindcss' source(none);
+@source '../';
+
+/* "Computer layout": wide AND tall enough. A phone turned sideways is wide but
+   short, so it keeps the phone layout. Keep in sync with DESKTOP_LAYOUT in
+   components/workspace/workspace.tsx. */
+@custom-variant desk (@media (min-width: 48rem) and (min-height: 32rem));
+
+/* Orbit design tokens — warm, playful, intentional. The chrome stays quiet so
+   places, cards and people's colors carry the page. Text colors pass WCAG AA
+   on white and ivory; status is never conveyed by color alone. */
+@theme {
+  --color-ivory: #f8f6f2;
+  --color-paper: #ffffff;
+  --color-ink: #24283b;
+  --color-ink-2: #4a4f66;
+  --color-ink-3: #686d84;
+  --color-line: #e8e3da;
+  --color-line-2: #d9d2c6;
+
+  --color-lilac: #b7a7e6;
+  --color-lilac-50: #f4f1fc;
+  --color-lilac-100: #e9e3fa;
+  --color-lilac-600: #6e56c2;
+  --color-lilac-700: #5a44a8;
+
+  --color-peach: #f0bba8;
+  --color-peach-50: #fdf1ec;
+  --color-peach-700: #a8553b;
+
+  --color-sage: #b6d8c2;
+  --color-sage-50: #eef6f0;
+  --color-sage-700: #3e7353;
+
+  --color-butter: #f3dc8c;
+  --color-butter-50: #fcf6e1;
+  --color-butter-800: #7a5b0b;
+
+  --color-sky: #a9cbea;
+  --color-sky-50: #eef5fb;
+  --color-sky-700: #2f5f8a;
+
+  --color-rose: #edb1c0;
+  --color-rose-50: #fcf0f3;
+  --color-rose-700: #9c3b55;
+
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  --font-display: var(--font-display-face), ui-serif, Georgia, 'Apple SD Gothic Neo', serif;
+
+  --shadow-card: 0 1px 2px rgb(36 40 59 / 0.05), 0 4px 14px rgb(36 40 59 / 0.06);
+  --shadow-lift: 0 2px 6px rgb(36 40 59 / 0.08), 0 14px 32px rgb(36 40 59 / 0.13);
+  --shadow-panel: -1px 0 0 var(--color-line), -12px 0 32px rgb(36 40 59 / 0.04);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ivory);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-lilac-600);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-lilac-100);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* React Flow: blend the canvas into the Orbit palette. */
+.react-flow {
+  --xy-background-color: var(--color-ivory);
+  --xy-node-boxshadow-selected: none;
+  --xy-selection-background-color: rgb(110 86 194 / 0.08);
+  --xy-selection-border: 1px dashed var(--color-lilac-600);
+}
+.react-flow__node-idea {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+.react-flow__attribution {
+  background: transparent;
+  color: var(--color-ink-3);
+}
+
+dialog::backdrop {
+  background: rgb(36 40 59 / 0.32);
+  backdrop-filter: blur(2px);
+}
+
+/* Canvas items: text, photos and stickers have no frame of their own. */
+.react-flow__node-text,
+.react-flow__node-photo,
+.react-flow__node-sticker,
+.react-flow__node-upload {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* Arrows start from a knob on an item's right edge (shown on hover). */
+.react-flow__handle.orbit-knob {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-lilac-600);
+  background: var(--color-paper);
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+  cursor: crosshair;
+  z-index: 5;
+}
+.react-flow__node:hover .orbit-knob:not(.orbit-knob-off),
+.react-flow__node.selected .orbit-knob:not(.orbit-knob-off) {
+  opacity: 1;
+}
+.react-flow__handle.orbit-knob:hover {
+  transform: translate(50%, -50%) scale(1.2);
+}
+.react-flow__handle.orbit-knob-off {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The whole item: where the arrow tool starts, and where a dragged arrow lands. */
+.react-flow__handle.orbit-fill {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  transform: none;
+  border: none;
+  border-radius: inherit;
+  background: transparent;
+  z-index: 6;
+}
+.react-flow__handle.orbit-fill:not(.orbit-drop) {
+  cursor: crosshair;
+}
+.react-flow__handle.orbit-drop.connectingto {
+  outline: 3px dashed var(--color-lilac-600);
+  outline-offset: 4px;
+  background: rgb(110 86 194 / 0.06);
+}
+.orbit-arrow-tool .react-flow__pane {
+  cursor: crosshair;
+}
+
+.react-flow__resize-control.handle.orbit-resize-handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1.5px solid var(--color-lilac-600);
+  background: var(--color-paper);
+}
+/* Text boxes only get wider or narrower: a grab bar on the right edge. */
+.react-flow__resize-control.line.orbit-width-line {
+  width: 12px;
+  border: none;
+  background: transparent;
+  cursor: ew-resize;
+}
+.react-flow__resize-control.line.orbit-width-line::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 22px;
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--color-lilac-600);
+}

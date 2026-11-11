@@ -1,0 +1,25 @@
+# Re-include everything first. Some machines have a catch-all `*` in a parent
+# folder's .gitignore (e.g. ~/.gitignore written by virtualenv). Tools that read
+# parent ignore files — like Tailwind's class scanner — would otherwise skip
+# every source file. Git itself never reads .gitignore files above the repo.
+!*
+
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+
+# local env & data
+.env
+.env.*.local
+.data/
+
+# generated
+packages/db/src/generated/
+next-env.d.ts
+
+# test artifacts
+playwright-report/
+test-results/

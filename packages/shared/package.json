@@ -1,0 +1,20 @@
+{
+  "name": "@orbit/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isomorphic domain model: types, validation schemas, permissions and pure planning logic.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./yboard": "./src/yboard.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fractional-indexing": "4.0.0",
+    "yjs": "13.6.33",
+    "zod": "4.6.7"
+  }
+}

@@ -1,0 +1,692 @@
+// Orbit data model. See docs/architecture.md for the data-authority rules.
+//
+// SQL is the source of truth for anything that needs validation, permissions or
+// history: users, membership, ideas, comments, votes, confirmed itinerary
+// versions, AI proposals and AI logs. The board layout and the shared itinerary
+// *draft* live in one Yjs document per plan (CanvasDocument) and merge as a CRDT.
+// A draft becomes history only through an explicit, version-checked commit.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum PlanType {
+  DATE
+  HANGOUT
+  TRIP
+  EVENT
+}
+
+enum PlanStatus {
+  DRAFT // created, nothing saved yet
+  PLANNING // collecting ideas / deciding
+  CONFIRMED // has at least one committed itinerary version
+  COMPLETED
+  ARCHIVED
+}
+
+// How the plan was started. Analytics only: it never partitions the workflow.
+enum EntryMode {
+  MANUAL
+  AI
+}
+
+enum MemberRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum IdeaKind {
+  PLACE // resolved to a real-world place (PlaceRef)
+  LINK // a saved link that is not (yet) tied to a place
+  NOTE // free-text idea ("picnic somewhere by the lake")
+  ACTIVITY // show, exhibition, class — usually time-bound
+}
+
+enum PlaceProvider {
+  MANUAL
+  GOOGLE
+  FOURSQUARE
+  OSM
+}
+
+enum SourceKind {
+  LINK
+  PHOTO
+  NOTE
+}
+
+// Shared UI vocabulary for facts that came from outside the app.
+enum Verification {
+  VERIFIED
+  NEEDS_RECHECK
+  UNKNOWN
+}
+
+// Lightweight signals. Deliberately NOT votes: "not interested" is feedback,
+// a vote is a formal decision inside a poll.
+enum ReactionKind {
+  INTERESTED
+  NOT_INTERESTED
+}
+
+enum CommitSource {
+  DRAFT
+  PROPOSAL
+  REPLAN
+  REVERT
+}
+
+enum ConstraintStrength {
+  HARD // must-have: never relaxed without explicit approval
+  SOFT // nice-to-have: influences ranking only
+}
+
+enum ConstraintVisibility {
+  GROUP // everyone in the plan can see it
+  PRIVATE // used for planning, shown to others only as "a member's constraint"
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum ProposalLabel {
+  BUDGET
+  BALANCED
+  EXPERIENCE
+}
+
+enum ProposalStatus {
+  READY
+  STALE // base version or inputs changed after generation
+  REJECTED
+  COMMITTED
+  EXPIRED
+}
+
+enum CommentKind {
+  HUMAN
+  AI_RESPONSE // a shared Orbit AI answer, posted into the thread by a human
+}
+
+enum AiMode {
+  ON_DEMAND // only when asked (@Orbit / Ask AI)
+  SUGGEST // may show a private "answer available" chip
+  SMART_AUTO // may auto-share verified factual answers (group opt-in)
+}
+
+enum AiChannel {
+  ASK_BUTTON
+  SUGGESTION_CHIP
+  MENTION
+  AUTO
+}
+
+enum AiVisibility {
+  PRIVATE // visible to the requester only
+  SHARED // posted into the idea's thread
+}
+
+enum AiResponseStatus {
+  PENDING
+  ANSWERED
+  ABSTAINED
+  FAILED
+}
+
+enum AiDecision {
+  IGNORE
+  SUGGEST
+  VERIFY_FACT
+}
+
+enum AiFinalAction {
+  AUTO_REPLY
+  SUGGEST_ONLY
+  ABSTAIN
+}
+
+// ─── Accounts & membership ──────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  color     String   @default("lilac") // person color tag used across the UI
+  locale    String   @default("en")
+  timezone  String   @default("UTC")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plansCreated      Plan[]             @relation("PlanCreator")
+  memberships       PlanMember[]
+  invitesCreated    InviteLink[]
+  ideasCreated      Idea[]             @relation("IdeaCreator")
+  sourcesAdded      IdeaSource[]
+  reactions         IdeaReaction[]
+  versionsCommitted ItineraryVersion[]
+  pollsCreated      Poll[]
+  votes             Vote[]
+  constraints       MemberConstraint[]
+  planningJobs      PlanningJob[]
+  comments          Comment[]
+  aiRequests        AiResponse[]       @relation("AiRequester")
+  aiShares          AiResponse[]       @relation("AiSharer")
+  aiConsents        MemberAiConsent[]
+  aiSettingsUpdated PlanAiSettings[]
+  activity          ActivityEvent[]
+  photosUploaded    PlanPhoto[]
+
+  @@map("users")
+}
+
+model Plan {
+  id              String     @id @default(cuid())
+  type            PlanType
+  name            String
+  status          PlanStatus @default(DRAFT)
+  city            String?
+  timezone        String? // IANA zone of the destination
+  startDate       DateTime?  @db.Date
+  endDate         DateTime?  @db.Date
+  startMin        Int? // minutes after local midnight
+  endMin          Int? // may exceed 1440 when the plan explicitly runs past midnight
+  budgetMinor     Int? // total for the whole group, in minor units
+  budgetCurrency  String?    @db.Char(3) // null = unknown, never inferred
+  entryMode       EntryMode?
+  currentVersion  Int        @default(0) // 0 = nothing committed yet
+  createdById     String
+  clientRequestId String // idempotency key: double-clicks never create two plans
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  archivedAt      DateTime?
+
+  createdBy   User               @relation("PlanCreator", fields: [createdById], references: [id])
+  members     PlanMember[]
+  invites     InviteLink[]
+  ideas       Idea[]
+  versions    ItineraryVersion[]
+  polls       Poll[]
+  constraints MemberConstraint[]
+  jobs        PlanningJob[]
+  proposals   PlanProposal[]
+  aiSettings  PlanAiSettings?
+  aiConsents  MemberAiConsent[]
+  aiResponses AiResponse[]
+  canvas      CanvasDocument?
+  photos      PlanPhoto[]
+  events      ActivityEvent[]
+
+  @@unique([createdById, clientRequestId])
+  @@map("plans")
+}
+
+model PlanMember {
+  planId   String
+  userId   String
+  role     MemberRole
+  lastView String? // the workspace tab this member opened last
+  joinedAt DateTime   @default(now())
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([planId, userId])
+  @@index([userId])
+  @@map("plan_members")
+}
+
+model InviteLink {
+  id          String     @id @default(cuid())
+  planId      String
+  tokenHash   String     @unique // only the hash is stored
+  role        MemberRole // EDITOR or VIEWER
+  createdById String
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  maxUses     Int?
+  useCount    Int        @default(0)
+  createdAt   DateTime   @default(now())
+
+  plan      Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@index([planId])
+  @@map("invite_links")
+}
+
+// ─── Places & ideas (Place = the real place, Source = how we found it) ─────
+
+model PlaceRef {
+  id           String        @id @default(cuid())
+  provider     PlaceProvider
+  externalId   String? // provider place id (storable); null for MANUAL
+  // Display fields: user-entered for MANUAL. For providers, cached only where
+  // their terms allow, with fetchedAt driving refresh/expiry.
+  name         String?
+  address      String?
+  lat          Float?
+  lng          Float?
+  category     String?
+  verification Verification  @default(UNKNOWN)
+  fetchedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  ideas Idea[]
+
+  @@unique([provider, externalId])
+  @@map("place_refs")
+}
+
+model Idea {
+  id              String    @id @default(cuid())
+  planId          String
+  kind            IdeaKind
+  title           String
+  note            String? // "why we saved it" — user-authored, separate from provider data
+  placeRefId      String?
+  shortlisted     Boolean   @default(false)
+  durationMin     Int? // user estimate, used when added to the itinerary
+  costMinor       Int? // user estimate for the whole group
+  costCurrency    String?   @db.Char(3)
+  createdById     String
+  clientRequestId String
+  mergedIntoId    String? // set when this idea was merged into a duplicate
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  plan        Plan            @relation(fields: [planId], references: [id], onDelete: Cascade)
+  place       PlaceRef?       @relation(fields: [placeRefId], references: [id])
+  createdBy   User            @relation("IdeaCreator", fields: [createdById], references: [id])
+  mergedInto  Idea?           @relation("IdeaMerge", fields: [mergedIntoId], references: [id])
+  mergedFrom  Idea[]          @relation("IdeaMerge")
+  sources     IdeaSource[]
+  reactions   IdeaReaction[]
+  comments    Comment[]
+  stops       ItineraryStop[]
+  pollOptions PollOption[]
+  aiResponses AiResponse[]
+
+  @@unique([planId, clientRequestId])
+  @@index([planId, archivedAt])
+  @@map("ideas")
+}
+
+model IdeaSource {
+  id              String     @id @default(cuid())
+  ideaId          String
+  planId          String // denormalized for per-plan duplicate-link lookups
+  kind            SourceKind
+  url             String?
+  urlKey          String? // canonical form used for duplicate detection
+  platform        String? // instagram | tiktok | google_maps | ...
+  title           String?
+  note            String?
+  addedById       String
+  // Idempotency key when the source was added by merging a duplicate into
+  // this idea, so a retried merge never attaches the same source twice.
+  clientRequestId String?
+  createdAt       DateTime   @default(now())
+
+  idea    Idea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  addedBy User @relation(fields: [addedById], references: [id])
+
+  @@unique([planId, clientRequestId])
+  @@index([ideaId])
+  @@index([planId, urlKey])
+  @@map("idea_sources")
+}
+
+model IdeaReaction {
+  ideaId    String
+  userId    String
+  kind      ReactionKind
+  createdAt DateTime     @default(now())
+
+  idea Idea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([ideaId, userId])
+  @@map("idea_reactions")
+}
+
+// ─── Confirmed itinerary history (immutable, optimistic concurrency) ───────
+
+model ItineraryVersion {
+  id            String       @id @default(cuid())
+  planId        String
+  version       Int
+  source        CommitSource
+  proposalId    String?
+  note          String?
+  committedById String
+  committedAt   DateTime     @default(now())
+
+  plan        Plan            @relation(fields: [planId], references: [id], onDelete: Cascade)
+  committedBy User            @relation(fields: [committedById], references: [id])
+  proposal    PlanProposal?   @relation(fields: [proposalId], references: [id])
+  stops       ItineraryStop[]
+
+  @@unique([planId, version])
+  @@map("itinerary_versions")
+}
+
+model ItineraryStop {
+  id                String  @id @default(cuid())
+  versionId         String
+  key               String // stable draft-stop id, lets us diff versions
+  ideaId            String?
+  title             String // snapshot: history stays readable if the idea changes
+  dayIndex          Int     @default(0)
+  sequence          Int
+  startMin          Int? // computed schedule at commit time
+  durationMin       Int
+  travelMinFromPrev Int?
+  fixedStartMin     Int? // user-pinned start (e.g. a reservation)
+  locked            Boolean @default(false) // preserved by regenerate / replan
+  costMinor         Int?
+  costCurrency      String? @db.Char(3)
+
+  version ItineraryVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  idea    Idea?            @relation(fields: [ideaId], references: [id], onDelete: SetNull)
+
+  @@unique([versionId, dayIndex, sequence])
+  @@unique([versionId, key])
+  @@index([ideaId])
+  @@map("itinerary_stops")
+}
+
+// ─── Group decisions ────────────────────────────────────────────────────────
+
+model Poll {
+  id          String    @id @default(cuid())
+  planId      String
+  question    String
+  createdById String
+  closesAt    DateTime?
+  closedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  plan      Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  createdBy User         @relation(fields: [createdById], references: [id])
+  options   PollOption[]
+  votes     Vote[]
+
+  @@index([planId])
+  @@map("polls")
+}
+
+model PollOption {
+  id       String  @id @default(cuid())
+  pollId   String
+  ideaId   String?
+  label    String
+  position Int
+
+  poll  Poll   @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  idea  Idea?  @relation(fields: [ideaId], references: [id], onDelete: SetNull)
+  votes Vote[]
+
+  @@map("poll_options")
+}
+
+model Vote {
+  pollId    String
+  userId    String
+  optionId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@id([pollId, userId]) // single choice: changing a vote is an upsert
+  @@map("votes")
+}
+
+model MemberConstraint {
+  id         String               @id @default(cuid())
+  planId     String
+  userId     String
+  strength   ConstraintStrength
+  category   String // budget | dietary | accessibility | transit | time | cuisine | vibe | other
+  value      Json
+  visibility ConstraintVisibility @default(GROUP)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([planId])
+  @@map("member_constraints")
+}
+
+// ─── AI planning (proposals are drafts; only a commit changes the plan) ────
+
+model PlanningJob {
+  id              String    @id @default(cuid())
+  planId          String
+  requestedById   String
+  status          JobStatus @default(QUEUED)
+  constraints     Json // PlanConstraints snapshot
+  basePlanVersion Int
+  error           String?
+  model           String? // set when an LLM read the note or wrote summaries (counts toward the AI limit)
+  createdAt       DateTime  @default(now())
+  finishedAt      DateTime?
+
+  plan        Plan           @relation(fields: [planId], references: [id], onDelete: Cascade)
+  requestedBy User           @relation(fields: [requestedById], references: [id])
+  proposals   PlanProposal[]
+
+  @@index([planId])
+  @@index([requestedById, createdAt])
+  @@map("planning_jobs")
+}
+
+model PlanProposal {
+  id              String         @id @default(cuid())
+  planId          String
+  jobId           String
+  label           ProposalLabel
+  status          ProposalStatus @default(READY)
+  basePlanVersion Int
+  payload         Json // stops, travel legs, costs, verified/unverified claims
+  createdAt       DateTime       @default(now())
+  expiresAt       DateTime?
+
+  plan     Plan               @relation(fields: [planId], references: [id], onDelete: Cascade)
+  job      PlanningJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  versions ItineraryVersion[]
+
+  @@index([planId])
+  @@map("plan_proposals")
+}
+
+// ─── Contextual comments & ambient AI ───────────────────────────────────────
+
+model Comment {
+  id              String      @id @default(cuid())
+  ideaId          String
+  parentId        String?
+  authorId        String // for AI_RESPONSE: the human who asked or shared it
+  kind            CommentKind @default(HUMAN)
+  content         String // human text, or the sharer's note for AI_RESPONSE
+  aiResponseId    String?     @unique
+  // Idempotency key per author: a double-tapped Send posts one comment.
+  clientRequestId String?
+  createdAt       DateTime    @default(now())
+  editedAt        DateTime?
+  deletedAt       DateTime? // tombstone
+
+  idea          Idea             @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  parent        Comment?         @relation("Thread", fields: [parentId], references: [id])
+  replies       Comment[]        @relation("Thread")
+  author        User             @relation(fields: [authorId], references: [id])
+  aiResponse    AiResponse?      @relation(fields: [aiResponseId], references: [id])
+  interventions AiIntervention[]
+
+  @@unique([authorId, clientRequestId])
+  @@index([ideaId, createdAt])
+  @@map("comments")
+}
+
+model AiResponse {
+  id               String           @id @default(cuid())
+  planId           String
+  ideaId           String
+  triggerCommentId String?
+  requestedById    String
+  channel          AiChannel
+  visibility       AiVisibility     @default(PRIVATE)
+  status           AiResponseStatus @default(PENDING)
+  questionSnapshot String // the question as asked, kept if the comment is edited
+  answer           String?
+  checkedAt        DateTime?
+  sharedById       String?
+  sharedAt         DateTime?
+  hiddenAt         DateTime?
+  feedback         Int? // +1 / -1 from the requester
+  clientRequestId  String? // idempotency: a double-tapped chip asks (and bills) once
+  preset           String? // the quick-question chip used, if any (HOURS, PRICE, ...)
+  model            String? // provider model id, for audit and cost tracking
+  usage            Json? // token and grounding counts reported by the provider
+  createdAt        DateTime         @default(now())
+
+  plan          Plan             @relation(fields: [planId], references: [id], onDelete: Cascade)
+  idea          Idea             @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  requestedBy   User             @relation("AiRequester", fields: [requestedById], references: [id])
+  sharedBy      User?            @relation("AiSharer", fields: [sharedById], references: [id])
+  sources       AiSource[]
+  comment       Comment?
+  interventions AiIntervention[]
+
+  @@unique([requestedById, clientRequestId])
+  @@index([ideaId, createdAt])
+  @@index([requestedById, createdAt])
+  @@map("ai_responses")
+}
+
+model AiSource {
+  id         String   @id @default(cuid())
+  responseId String
+  url        String
+  title      String?
+  provider   String?
+  accessedAt DateTime
+
+  response AiResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  @@map("ai_sources")
+}
+
+model AiIntervention {
+  id          String         @id @default(cuid())
+  commentId   String
+  mode        AiMode
+  label       String // classifier label, e.g. factual_question | opinion | joke
+  confidence  Float
+  decision    AiDecision
+  finalAction AiFinalAction?
+  reasonCode  String?
+  responseId  String?
+  createdAt   DateTime       @default(now())
+
+  comment  Comment     @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  response AiResponse? @relation(fields: [responseId], references: [id])
+
+  @@index([commentId])
+  @@map("ai_interventions")
+}
+
+model PlanAiSettings {
+  planId      String   @id
+  mode        AiMode   @default(ON_DEMAND)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  plan      Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  @@map("plan_ai_settings")
+}
+
+model MemberAiConsent {
+  planId    String
+  userId    String
+  agreed    Boolean
+  updatedAt DateTime @updatedAt
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([planId, userId])
+  @@map("member_ai_consent")
+}
+
+// ─── Collaboration & activity ───────────────────────────────────────────────
+
+// Yjs state for the board layout + shared itinerary draft (one doc per plan).
+// A photo on the board. The file (re-encoded, metadata stripped) is in photo
+// storage; the canvas item that shows it is in the plan's Yjs document.
+model PlanPhoto {
+  id              String   @id
+  planId          String
+  uploadedById    String
+  width           Int
+  height          Int
+  bytes           Int // stored full-size file
+  thumbBytes      Int
+  clientRequestId String // idempotency key: a retried upload stores the photo once
+  createdAt       DateTime @default(now())
+
+  plan       Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@unique([uploadedById, clientRequestId])
+  @@index([planId, createdAt])
+  @@map("plan_photos")
+}
+
+model CanvasDocument {
+  planId    String   @id
+  state     Bytes
+  updatedAt DateTime @updatedAt
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@map("canvas_documents")
+}
+
+model ActivityEvent {
+  id        String   @id @default(cuid())
+  planId    String
+  actorId   String?
+  type      String // plan.created | idea.created | itinerary.committed | ...
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([planId, createdAt])
+  @@map("activity_events")
+}

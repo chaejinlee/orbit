@@ -1,0 +1,30 @@
+{
+  "name": "orbit",
+  "private": true,
+  "type": "module",
+  "description": "Orbit — plan together, go together. Collaborative planning for dates, hangouts and trips.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n db,api,rt,web -c gray,blue,magenta,green \"npm run db:start\" \"npm run dev -w @orbit/api\" \"npm run dev -w @orbit/realtime\" \"npm run dev -w @orbit/web\"",
+    "dev:phone": "node scripts/dev-phone.mjs",
+    "db:start": "npm run db:start -w @orbit/db",
+    "db:migrate": "npm run migrate -w @orbit/db --",
+    "db:generate": "npm run generate -w @orbit/db",
+    "db:seed": "npm run seed -w @orbit/db",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "concurrently": "10.0.7",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
+  }
+}

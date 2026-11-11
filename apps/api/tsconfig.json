@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // Nest's decorators. No emitDecoratorMetadata: every injection names its
+    // token with @Inject(...), which keeps the code runnable by esbuild/tsx/Oxc.
+    "experimentalDecorators": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}
